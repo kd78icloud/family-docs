@@ -53,6 +53,7 @@ input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-ra
 input:focus,select:focus{border-color:var(--accent)}
 .fieldedit{display:flex;gap:6px;margin-bottom:8px;align-items:center}
 .fieldedit .fk{flex:0 0 38%}
+.mv{border:0;background:var(--line);color:var(--link);font:inherit;font-size:13px;padding:6px 10px;border-radius:8px;cursor:pointer;flex:none}
 .x{border:0;background:none;color:var(--danger);font-size:24px;line-height:1;padding:2px 6px;cursor:pointer;flex:none}
 .empty{color:var(--hint);text-align:center;padding:26px 0}
 .err{background:var(--card);border-radius:12px;padding:16px;color:var(--danger);user-select:text;-webkit-user-select:text}
@@ -233,7 +234,7 @@ const VIEWS = {
       ? `<div class="list">${d.files.map(f => `<div class="item" data-act="openFile" data-doc="${esc(d.id)}" data-id="${esc(f.id)}">
           <div class="ico">${f.mime === 'application/pdf' ? '📄' : '🖼'}</div>
           <div class="grow"><div class="t">${esc(f.name)}</div><div class="h">${f.mime === 'application/pdf' ? 'PDF' : 'Изображение'}</div></div>
-          ${isAdmin() ? `<button class="x" data-act="deleteFile" data-doc="${esc(d.id)}" data-id="${esc(f.id)}" aria-label="Удалить">×</button>` : '<span class="chev">›</span>'}
+          ${isAdmin() ? `<button class="mv" data-act="moveFile" data-doc="${esc(d.id)}" data-id="${esc(f.id)}" aria-label="Переместить">Переместить</button><button class="x" data-act="deleteFile" data-doc="${esc(d.id)}" data-id="${esc(f.id)}" aria-label="Удалить">×</button>` : '<span class="chev">›</span>'}
         </div>`).join('')}</div>`
       : `<div class="empty">Сканов нет</div>`;
     if (isAdmin()) h += btn('+ Загрузить PDF / JPG', 'upload', '', { id: d.id })
@@ -271,6 +272,26 @@ const VIEWS = {
     } catch (e) {
       vw.innerHTML = `<div class="err">${esc(e.message)}</div>`;
     }
+  },
+
+  move({ docId, fileId, memberId }) {
+    const d = docOf(docId); const f = d && d.files.find(x => x.id === fileId);
+    if (!f) return back();
+    if (!memberId) {
+      const ms = [...S.members].sort((a, b) => a.order - b.order);
+      set(`<h1>Переместить скан</h1><div class="sub">${esc(f.name)} — выберите раздел</div>
+        <div class="list">${ms.map(m => `<div class="item" data-act="movePickMember" data-doc="${esc(docId)}" data-file="${esc(fileId)}" data-id="${esc(m.id)}">
+          <div class="avatar">${esc((m.name || '?')[0].toUpperCase())}</div>
+          <div class="grow"><div class="t">${esc(m.name)}</div></div><span class="chev">›</span></div>`).join('')}</div>`);
+      return;
+    }
+    const m = memberOf(memberId);
+    const ds = S.docs.filter(x => x.member_id === memberId && x.id !== docId);
+    set(`<h1>${esc(m ? m.name : '')}</h1><div class="sub">В какой документ положить «${esc(f.name)}»?</div>
+      ${ds.length ? `<div class="list">${ds.map(x => `<div class="item" data-act="moveTo" data-doc="${esc(docId)}" data-file="${esc(fileId)}" data-id="${esc(x.id)}">
+        <div class="ico">${x.files.length ? '📄' : '📝'}</div>
+        <div class="grow"><div class="t">${esc(x.title)}</div><div class="h">${plural(x.files.length, 'файл', 'файла', 'файлов')}</div></div>
+        <span class="chev">›</span></div>`).join('')}</div>` : '<div class="empty">В этом разделе нет документов</div>'}`);
   },
 
   editMember({ id }) {
@@ -380,6 +401,16 @@ const ACT = {
     uploadDocId = d.id;
     const fi = document.getElementById('fileInput');
     fi.value = ''; fi.click();
+  },
+  moveFile: d => go('move', { docId: d.doc, fileId: d.id }),
+  movePickMember: d => go('move', { docId: d.doc, fileId: d.file, memberId: d.id }),
+  async moveTo(d) {
+    const r = await api('moveFile', { docId: d.doc, fileId: d.file, toDocId: d.id });
+    upsertLocal(S.docs, r.dst);
+    if (r.src) upsertLocal(S.docs, r.src); else S.docs = S.docs.filter(x => x.id !== r.srcId);
+    while (stack.length > 1 && cur().view === 'move') stack.pop();
+    if (!r.src && cur().view === 'doc' && stack.length > 1) stack.pop();
+    toast(`Перемещено в «${r.dst.title}»`); haptic(); render();
   },
   async deleteFile(d) {
     if (!await ask('Удалить этот скан?')) return;
