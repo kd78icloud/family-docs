@@ -251,7 +251,7 @@ const VIEWS = {
           <span class="chev">›</span></div>`).join('')}</div>`
       : `<div class="empty">Документов пока нет</div>`;
     if (isAdmin()) h += `<div class="gap"></div>` + btn('+ Документ', 'addDoc', '', { id })
-      + `<div class="row">${btn('Переименовать', 'editMember', 'sec', { id })}${btn('Удалить', 'deleteMember', 'danger', { id })}</div>`;
+      + `<div class="row">${btn('Настроить', 'editMember', 'sec', { id })}${btn('Удалить', 'deleteMember', 'danger', { id })}</div>`;
     set(h);
   },
 
@@ -323,8 +323,10 @@ const VIEWS = {
 
   editMember({ id }) {
     const m = id ? memberOf(id) : null;
-    set(`<h1>${m ? 'Переименовать' : 'Новый член семьи'}</h1>
+    set(`<h1>${m ? 'Настройки раздела' : 'Новый раздел'}</h1>
       <label>Имя</label><input id="mName" value="${esc(m ? m.name : '')}" placeholder="Имя" autocomplete="off">
+      <label>Имя для файлов (например, ИвановаАБ)</label><input id="mPrefix" value="${esc(m ? m.prefix || '' : '')}" placeholder="${esc(m ? m.name : 'Как называть файлы')}" autocomplete="off">
+      <div class="note">Файлы в чат придут как «${esc(m && m.prefix ? m.prefix : (m ? m.name : 'Имя'))}_Загранпаспорт.pdf». Пусто — используется имя раздела.</div>
       <div class="gap"></div>${btn('Сохранить', 'saveMember', '', { id: id || '' })}`);
   },
 
@@ -397,7 +399,7 @@ const ACT = {
   editMember: d => go('editMember', { id: d.id }),
   async saveMember(d) {
     const name = val('mName'); if (!name) return toast('Введите имя');
-    const m = await api('saveMember', { member: { id: d.id || '', name } });
+    const m = await api('saveMember', { member: { id: d.id || '', name, prefix: val('mPrefix') } });
     upsertLocal(S.members, m); haptic(); back();
   },
   async deleteMember(d) {
