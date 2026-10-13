@@ -77,7 +77,6 @@ if (tg) {
   tg.ready(); tg.expand();
   try { if (tg.isVersionAtLeast('6.1')) { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } } catch (e) {}
 }
-if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const MAX_MB = 15;
 const ALLOWED = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
@@ -187,6 +186,41 @@ function render(keepScroll) {
 }
 if (tg) tg.BackButton.onClick(back);
 
+/* ---------- Просмотр PDF ---------- */
+let pdfWorkerReady = null;
+function pdfWorker() {
+  // Модуль PDF загружаем как свой (blob), иначе в WebView телефона он может не запуститься
+  if (!pdfWorkerReady) {
+    pdfWorkerReady = fetch('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js')
+      .then(r => { if (!r.ok) throw new Error('модуль PDF не загрузился'); return r.text(); })
+      .then(code => { pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([code], { type: 'text/javascript' })); })
+      .catch(e => { pdfWorkerReady = null; throw e; });
+  }
+  return pdfWorkerReady;
+}
+async function renderPdf(box, b64) {
+  if (!window.pdfjsLib) throw new Error('модуль PDF не загрузился');
+  await pdfWorker();
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const pdf = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+  box.innerHTML = '';
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(box.clientWidth || 0, 320);
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    // ширина экрана × плотность пикселей, но не больше ~12 Мп на страницу (лимит холста в iOS)
+    let scale = (width * dpr) / base.width;
+    scale = Math.min(scale, Math.sqrt(12e6 / (base.width * base.height)), 4);
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas');
+    c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+    box.appendChild(c);
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    page.cleanup();
+  }
+}
+
 /* ---------- Экраны ---------- */
 const VIEWS = {
   members() {
@@ -247,30 +281,23 @@ const VIEWS = {
     const f = d.files.find(x => x.id === fileId); if (!f) return back();
     set(`<h1>${esc(d.title)}</h1><div class="sub">${esc(f.name)}</div>
       <div class="viewer" id="vw"><div class="empty">Загрузка…</div></div>
-      ${btn('Отправить мне в чат Telegram', 'send', 'sec', { doc: docId, id: fileId })}
-      <div class="note">Пришлёт файл в чат с ботом — оттуда его можно сохранить, увеличить или переслать.</div>`);
+      ${btn('Открыть в Telegram', 'send', f.mime === 'application/pdf' ? '' : 'sec', { doc: docId, id: fileId, close: '1' })}
+      <div class="note">Пришлёт файл в чат с ботом и закроет приложение — в чате файл откроется во встроенном просмотрщике Telegram, его можно увеличить, сохранить или переслать.</div>`);
     const vw = document.getElementById('vw');
     try {
       if (!fileCache[fileId]) fileCache[fileId] = (await api('file', { docId, fileId })).data;
       if (cur().view !== 'viewer' || cur().args.fileId !== fileId) return;
       const b64 = fileCache[fileId];
       if (f.mime === 'application/pdf') {
-        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-        const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
-        vw.innerHTML = '';
-        for (let p = 1; p <= pdf.numPages; p++) {
-          const page = await pdf.getPage(p);
-          const vp = page.getViewport({ scale: 2 });
-          const c = document.createElement('canvas');
-          c.width = vp.width; c.height = vp.height;
-          vw.appendChild(c);
-          await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
-        }
+        await Promise.race([
+          renderPdf(vw, b64),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('слишком долго')), 20000))
+        ]);
       } else {
         vw.innerHTML = `<img alt="" src="data:${esc(f.mime)};base64,${b64}">`;
       }
     } catch (e) {
-      vw.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+      vw.innerHTML = `<div class="err">Не удалось показать файл здесь (${esc(e.message)}).<br>Нажмите «Открыть в Telegram» ниже.</div>`;
     }
   },
 
@@ -363,6 +390,7 @@ const ACT = {
     toast('Отправляю…', 30000);
     await api('send', { docId: d.doc, fileId: d.id });
     toast('Отправлено в чат с ботом'); haptic();
+    if (d.close && tg) setTimeout(() => tg.close(), 700);
   },
 
   addMember: () => go('editMember', {}),
